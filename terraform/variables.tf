@@ -1,6 +1,6 @@
 variable "RESOURCE_GROUP_NAME" {
   type    = string
-  default = "jmeter"
+  default = "jmeter-cluster"
 }
 
 variable "LOCATION" {
@@ -30,27 +30,27 @@ variable "JMETER_WORKERS_COUNT" {
 
 variable "JMETER_WORKER_CPU" {
   type    = string
-  default = "2.0"
+  default = "1.0"
 }
 
 variable "JMETER_WORKER_MEMORY" {
   type    = string
-  default = "8.0"
+  default = "2.0"
 }
 
 variable "JMETER_CONTROLLER_CPU" {
   type    = string
-  default = "2.0"
+  default = "1.0"
 }
 
 variable "JMETER_CONTROLLER_MEMORY" {
   type    = string
-  default = "8.0"
+  default = "2.0"
 }
 
 variable "JMETER_DOCKER_IMAGE" {
   type    = string
-  default = "justb4/jmeter:5.1.1"
+  default = "anasoid/jmeter:5.4-plugins"
 }
 
 variable "JMETER_DOCKER_PORT" {
@@ -89,6 +89,68 @@ variable "JMETER_DASHBOARD_FOLDER" {
 }
 
 variable "JMETER_EXTRA_CLI_ARGUMENTS" {
+  type        = string
+  default     = ""
+  description = "Arguments add custom environement variable"
+}
+
+variable "JMETER_PIPELINE_CLI_ARGUMENTS" {
+  type        = string
+  default     = ""
+  description = "Arguments add by pipeline, not by custom environement variable"
+}
+
+#Docker config
+variable "JMETER_JVM_ARGS" {
+  type    = string
+  default = "-Xmx1G "
+}
+
+variable "JMETER_PROPERTIES_FILES" {
   type    = string
   default = ""
 }
+
+variable "JMETER_CONF_CSV_DIVIDED_TO_OUT" {
+  type    = string
+  default = "true"
+}
+
+variable "JMETER_CONF_CSV_WITH_HEADER" {
+  type    = string
+  default = "true"
+}
+
+variable "JMETER_CONF_CSV_SPLIT_PATTERN" {
+  type    = string
+  default = "**_split.csv"
+}
+
+variable "JMETER_CONF_CSV_SPLIT" {
+  type    = string
+  default = "true"
+}
+
+variable "JMETER_CONF_EXEC_TIMEOUT" {
+  type    = string
+  default = "true"
+}
+
+variable "JMETER_CONF_COPY_TO_WORKSPACE" {
+  type    = string
+  default = "true"
+}
+variable "JMETER_PLUGINS_MANAGER_INSTALL_FOR_JMX" {
+  type    = string
+  default = "true"
+}
+
+variable "JMETER_PLUGINS_MANAGER_INSTALL_LIST" {
+  type    = string
+  default = ""
+}
+
+
+
+
+

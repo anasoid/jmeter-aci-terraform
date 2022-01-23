@@ -1,141 +1,310 @@
+parameters:
+  - name: jmx_file
+    displayName: JMX FILE
+    type: string
+    default: sample.jmx
+    values:
+      - sample.jmx
+      - sample.report-blazemeter.jmx
+      - base.jmx
+  - name: workers_count
+    displayName: WORKER COUNT
+    type: number
+    default: 2
+    values:
+      - 1
+      - 2
+      - 3
+      - 4
+  - name: timeout
+    displayName: Timeout
+    type: number
+    default: 1800
+    values:
+      - 1800
+      - 3600
+      - 5400
+      - 7200
+      - 9000
+      - 12600
+
+  - name: generateJunit
+    displayName: Generate Junit Results
+    type: boolean
+    default: false
+
 trigger: none
 
 pool:
-  vmImage: 'ubuntu-18.04'
+  vmImage: "ubuntu-latest"
 
 variables:
-- group: JMETER_TERRAFORM_SETTINGS
-- name: JMETER_DIRECTORY_INPUT
-  value: $(System.DefaultWorkingDirectory)/jmeter
-- name: JMETER_DIRECTORY_OUTPUT
-  value: $(System.DefaultWorkingDirectory)/results
-- name: TERRAFORM_VERSION
-  value: 0.13.2
+  - group: JMETER_TERRAFORM_SETTINGS
+  - name: JMETER_DIRECTORY_INPUT
+    value: $(System.DefaultWorkingDirectory)/jmeter
+  - name: JMETER_DIRECTORY_OUTPUT
+    value: $(System.DefaultWorkingDirectory)/out
+  - name: TERRAFORM_VERSION
+    value: 1.1.3
+  - name: TF_VAR_JMETER_JMX_FILE
+    value: ${{ parameters.jmx_file }}
+  - name: TF_VAR_JMETER_WORKERS_COUNT
+    value: ${{ parameters.workers_count }}
+  - name: TF_VAR_JMETER_CONF_EXEC_TIMEOUT
+    value: ${{ parameters.timeout }}
+  - name: TF_VAR_JMETER_PLUGINS_MANAGER_INSTALL_FOR_JMX
+    value: true
+  - name: TF_VAR_JMETER_PIPELINE_CLI_ARGUMENTS
+    value: " -Jblazemeter.upload.token=$(BLAZEMETER_UPLOAD_TOKEN) "
 
 steps:
+  - task: AzureCLI@2
+    displayName: "SETUP: Validate JMeter Docker Image"
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az acr login -n $(TF_VAR_JMETER_ACR_NAME)
+        docker pull $(TF_VAR_JMETER_DOCKER_IMAGE)
 
-- task: AzureCLI@2
-  displayName: 'SETUP: Validate JMeter Docker Image'
-  inputs:
-    azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
-    scriptType: bash
-    scriptLocation: inlineScript
-    inlineScript: |
-      az acr login -n $(TF_VAR_JMETER_ACR_NAME)
-      docker pull $(TF_VAR_JMETER_DOCKER_IMAGE)
+  - script: |
+      docker run --name=jmx-validator -v $(JMETER_DIRECTORY_INPUT):/jmeter/project -w /jmeter/project \
+      -e JMETER_CHECK_ONLY="true" \
+      -e JMETER_JMX="$(TF_VAR_JMETER_JMX_FILE)" \
+      -e CONF_SKIP_PRE_ACTION="true" \
+      -e CONF_SKIP_POST_ACTION="true" \
+      -e JMETER_PLUGINS_MANAGER_INSTALL_FOR_JMX="true" \
+       $(TF_VAR_JMETER_DOCKER_IMAGE)
 
-- script: |
-    docker run --name=jmx-validator -v $(JMETER_DIRECTORY_INPUT):/jmeter -w /jmeter \
-      --entrypoint "TestPlanCheck.sh" $(TF_VAR_JMETER_DOCKER_IMAGE) \
-      --stats --tree-dump --jmx $(TF_VAR_JMETER_JMX_FILE)
-  displayName: 'SETUP: Validate JMX File'
+    displayName: "SETUP: Validate JMX File"
 
-- task: AzureCLI@2
-  displayName: 'SETUP: Prepare Terraform Credentials'
-  inputs:
-    azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
-    scriptType: bash
-    scriptLocation: inlineScript
-    addSpnToEnvironment: true
-    inlineScript: |
-      echo "##vso[task.setvariable variable=ARM_CLIENT_ID]$servicePrincipalId"
-      echo "##vso[task.setvariable variable=ARM_CLIENT_SECRET]$servicePrincipalKey"
-      echo "##vso[task.setvariable variable=ARM_TENANT_ID]$tenantId"
-      echo "##vso[task.setvariable variable=ARM_SUBSCRIPTION_ID]$AZURE_SUBSCRIPTION_ID"
+  - task: AzureCLI@2
+    displayName: "SETUP: Prepare Terraform Credentials"
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: true
+      inlineScript: |
+        echo "##vso[task.setvariable variable=ARM_CLIENT_ID]$servicePrincipalId"
+        echo "##vso[task.setvariable variable=ARM_CLIENT_SECRET]$servicePrincipalKey"
+        echo "##vso[task.setvariable variable=ARM_TENANT_ID]$tenantId"
+        echo "##vso[task.setvariable variable=ARM_SUBSCRIPTION_ID]$AZURE_SUBSCRIPTION_ID"
 
-- script: |
-    wget https://releases.hashicorp.com/terraform/$(TERRAFORM_VERSION)/terraform_$(TERRAFORM_VERSION)_linux_amd64.zip
-    unzip terraform_$(TERRAFORM_VERSION)_linux_amd64.zip
-    sudo mv ./terraform  /usr/local/bin
-  workingDirectory: $(Agent.TempDirectory)
-  displayName: 'SETUP: Install Terraform'
+  - script: |
+      wget https://releases.hashicorp.com/terraform/$(TERRAFORM_VERSION)/terraform_$(TERRAFORM_VERSION)_linux_amd64.zip
+      unzip terraform_$(TERRAFORM_VERSION)_linux_amd64.zip
+      sudo mv ./terraform  /usr/local/bin
+    workingDirectory: $(Agent.TempDirectory)
+    displayName: "SETUP: Install Terraform"
 
-- script: terraform init
-  workingDirectory: ./terraform
-  displayName: 'SETUP: Run Terraform Init'
-
-- script: terraform apply -target azurerm_storage_share.jmeter_share -auto-approve
-  workingDirectory: ./terraform
-  displayName: 'SETUP: Run Terraform Apply (target=file share)'
-
-- script: |
-    SAS_END=`date -u -d "30 minutes" '+%Y-%m-%dT%H:%MZ'` && \
-    JMETER_SAS=`az storage share generate-sas -n jmeter --account-name $(terraform output storage_account_name) --account-key $(terraform output storage_account_key) --https-only --permissions dlrw --expiry $SAS_END -o tsv` && \
-    azcopy cp \
-    "$(JMETER_DIRECTORY_INPUT)/*.jmx" \
-    $(terraform output storage_file_share_url)?$JMETER_SAS \
-    --recursive
-  workingDirectory: ./terraform
-  displayName: 'SETUP: Transfer JMeter Files to Storage Account'
-
-- script: terraform apply -auto-approve
-  workingDirectory: ./terraform
-  displayName: 'SETUP: Run Terraform Apply (target=all)'
-
-- task: AzureCLI@2
-  inputs:
-    azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+  - script: terraform init
     workingDirectory: ./terraform
-    scriptType: bash
-    scriptLocation: inlineScript
-    inlineScript: |
-      RG=$(terraform output resource_group_name)
-      NAME=$(terraform output jmeter_controller_name)
-      echo "`date`: Started!"
-      while [ $(az container show -g $RG -n $NAME --query "containers[0].instanceView.currentState.state" -o tsv) == "Running" ]; do
-        echo "`date`: Still Running..."
-        sleep 20
-      done
-      echo "`date`: Finished!"
-  displayName: 'TEST: Wait Test Execution'
+    displayName: "SETUP: Run Terraform Init"
 
-- task: AzureCLI@2
-  inputs:
-    azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+  - script: terraform apply -target azurerm_storage_share.jmeter_share -auto-approve -input=false -lock=false
     workingDirectory: ./terraform
-    scriptType: bash
-    scriptLocation: inlineScript
-    inlineScript: |
-      az container logs -g $(terraform output resource_group_name) -n $(terraform output jmeter_controller_name)
-      RESOURCE_GROUP=$(terraform output resource_group_name)
-      echo -n $(terraform output jmeter_workers_names) | xargs -t -d "," -I '{}' -n1 az container logs -g $RESOURCE_GROUP -n {}
-  displayName: 'RESULTS: Collect JMeter Controller and Worker Logs'
+    displayName: "SETUP: Run Terraform Apply (target=file share)"
 
-- task: AzureCLI@2
-  inputs:
-    azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+  - script: |
+      SAS_END=`date -u -d "60 minutes" '+%Y-%m-%dT%H:%MZ'` && \
+      JMETER_SAS=`az storage share generate-sas -n jmeter --account-name $(terraform output  --raw storage_account_name) --account-key $(terraform output  --raw storage_account_key) --https-only --permissions dlrw --expiry $SAS_END -o tsv` && \
+      azcopy cp \
+      "$(JMETER_DIRECTORY_INPUT)/*" \
+      $(terraform output  --raw storage_file_share_url)/project?$JMETER_SAS \
+      --recursive --log-level INFO
+      echo "COPY TARGET $(terraform output  --raw storage_file_share_url)?$JMETER_SAS"
     workingDirectory: ./terraform
-    scriptType: bash
-    scriptLocation: inlineScript
-    inlineScript: |
-       SAS_END=`date -u -d "30 minutes" '+%Y-%m-%dT%H:%MZ'` && \
-       JMETER_SAS=`az storage share generate-sas -n jmeter --account-name $(terraform output storage_account_name) --account-key $(terraform output storage_account_key) --https-only --permissions dlrw --expiry $SAS_END -o tsv` && \
-       azcopy cp \
-         $(terraform output storage_file_share_url)?$JMETER_SAS \
-         "$(JMETER_DIRECTORY_OUTPUT)" \
-         --recursive
-  displayName: 'RESULTS: Get JMeter Artifacts'
+    displayName: "SETUP: Transfer JMeter Files to Storage Account"
 
-- script: |
-    JMETER_RESULTS=$(JMETER_DIRECTORY_OUTPUT)/jmeter/$(terraform output jmeter_results_file)
-    JUNIT_RESULTS=$(JMETER_DIRECTORY_OUTPUT)/output.xml
-    python3 ../scripts/jtl_junit_converter.py $JMETER_RESULTS $JUNIT_RESULTS
-  workingDirectory: ./terraform
-  displayName: 'RESULTS: Convert JMeter Results to JUnit Format'
+  - script: terraform apply -auto-approve -input=false -lock=false
+    workingDirectory: ./terraform
+    displayName: "SETUP: Run Terraform Apply (target=all)"
 
-- task: PublishTestResults@2
-  inputs:
-    testResultsFormat: 'JUnit'
-    testResultsFiles: '$(JMETER_DIRECTORY_OUTPUT)/output.xml'
-    failTaskOnFailedTests: true
-  displayName: 'RESULTS: Publish Load Testing Results'
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+      workingDirectory: ./terraform
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        RESOURCE_GROUP=$(terraform output  --raw resource_group_name)
+        CONTROLLER_NAME=$(terraform output  --raw jmeter_controller_name)
 
-- publish: $(JMETER_DIRECTORY_OUTPUT)
-  artifact: JMeterResults
-  condition: succeededOrFailed()
-  displayName: 'RESULTS: Publish Load Test Artifacts'
+        echo "##[group]Status Jmeter nodes"
+        echo "-----------------------------------------------------------------------------------------------------------------------------"
+        az container show -g $RESOURCE_GROUP -n $CONTROLLER_NAME -o table
+        for instance in $(echo -n $(terraform output  --raw jmeter_workers_names)); do
+          echo "-----------------------------------------------------------------------------------------------------------------------------"
+          az container show -g $RESOURCE_GROUP -n  $instance -o table
+        done
+        echo "##[endgroup]"
 
-- script: terraform destroy -auto-approve
-  condition: always()
-  workingDirectory: ./terraform
-  displayName: 'TEARDOWN: Run Terraform Destroy'
+
+
+        echo "`date`: Started!"
+        while [ $(az container show -g $RESOURCE_GROUP -n $CONTROLLER_NAME --query "containers[0].instanceView.currentState.state" -o tsv) == "Running" ]; do
+          echo "`date`: Still Running...$CONTROLLER_NAME"
+          
+          sleep 20
+        done
+
+        echo "`date`: Finished!"
+
+        echo "##[group]Status Jmeter nodes"
+        echo "-----------------------------------------------------------------------------------------------------------------------------"
+        az container show -g $RESOURCE_GROUP -n $CONTROLLER_NAME -o table
+        for instance in $(echo -n $(terraform output  --raw jmeter_workers_names)); do
+          echo "-----------------------------------------------------------------------------------------------------------------------------"
+          az container show -g $RESOURCE_GROUP -n  $instance -o table
+        done
+        echo "##[endgroup]"
+    displayName: "TEST: Wait Test Execution"
+
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+      workingDirectory: ./terraform
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        RESOURCE_GROUP=$(terraform output  --raw resource_group_name)
+        CONTROLLER_NAME=$(terraform output  --raw jmeter_controller_name)
+
+        statusController=$(az container show -g $RESOURCE_GROUP -n $CONTROLLER_NAME --query "containers[0].instanceView.currentState.exitCode" -o tsv)
+        echo ">>>Controller $CONTROLLER_NAME : exit($statusController)"
+        if [[ "$statusController" != "0" ]];then
+          echo "##[error]node exit with error" ;
+          echo "##[group]Logs Worker $CONTROLLER_NAME"
+          az container logs -g $RESOURCE_GROUP -n $CONTROLLER_NAME ;
+          echo "##[endgroup]"
+          endWithError=true;
+        fi;
+        for instance in $(echo -n $(terraform output  --raw jmeter_workers_names)); do
+          status=$(az container show -g $RESOURCE_GROUP -n $instance  --query "containers[0].instanceView.currentState.exitCode" -o tsv);
+          echo ">>>Worker $instance : exit($status)" ;
+          if [[ "$status" != "0" ]];then
+            echo "##[error]node exit with error" ;
+            echo "##[group]Logs Worker $instance"
+            az container logs -g $RESOURCE_GROUP -n $instance;
+            echo "##[endgroup]"
+            endWithError=true; 
+          fi; 
+        done
+        if [ ! -z "$endWithError" ]; then
+          echo ">>>>Exit with error"
+          exit 1;
+        fi
+
+    displayName: "RESULTS: Collect Exit Status"
+
+  - task: AzureCLI@2
+    condition: succeededOrFailed()
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+      workingDirectory: ./terraform
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        RESOURCE_GROUP=$(terraform output  --raw resource_group_name)
+        CONTROLLER_NAME=$(terraform output  --raw jmeter_controller_name)
+
+        echo "##[group]Logs Worker $CONTROLLER_NAME"
+        az container logs -g $RESOURCE_GROUP -n $CONTROLLER_NAME
+        echo "##[endgroup]"
+
+        for instance in $(echo -n $(terraform output  --raw jmeter_workers_names)); do
+          printf "\n"
+          echo "##############################################################################################################################"
+          echo "##[group]Logs Worker $instance"
+          az container logs -g $RESOURCE_GROUP -n  $instance
+          echo "##[endgroup]"
+        done
+
+    displayName: "RESULTS: Collect JMeter Controller and Worker Logs"
+
+  - task: AzureCLI@2
+    inputs:
+      azureSubscription: $(AZURE_SERVICE_CONNECTION_NAME)
+      workingDirectory: ./terraform
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        SAS_END=`date -u -d "60 minutes" '+%Y-%m-%dT%H:%MZ'` && \
+        JMETER_SAS=`az storage share generate-sas -n jmeter --account-name $(terraform output  --raw storage_account_name) --account-key $(terraform output  --raw storage_account_key) --https-only --permissions dlrw --expiry $SAS_END -o tsv` && \
+        if [ ! -d $(JMETER_DIRECTORY_OUTPUT) ]; then
+           mkdir -p $(JMETER_DIRECTORY_OUTPUT)
+        fi
+        azcopy cp \
+          $(terraform output  --raw storage_file_share_url)/out?$JMETER_SAS \
+          "$(System.DefaultWorkingDirectory)" \
+          --recursive --log-level INFO
+        echo "COPY SOURCE $(terraform output  --raw storage_file_share_url)/out?$JMETER_SAS"  
+        if [ ! -d $(JMETER_DIRECTORY_OUTPUT)/csv ]; then
+           mkdir -p $(JMETER_DIRECTORY_OUTPUT)/csv
+        fi
+        ls -laR   $(JMETER_DIRECTORY_OUTPUT)
+    displayName: "RESULTS: Get JMeter Artifacts"
+
+  - ${{ if eq(parameters.generateJunit, true) }}:
+      - script: |
+          JMETER_RESULTS=$(JMETER_DIRECTORY_OUTPUT)/jtl/$(terraform output  --raw jmeter_results_file)
+          JUNIT_RESULTS=$(JMETER_DIRECTORY_OUTPUT)/output.xml
+          python3 ../scripts/jtl_junit_converter.py $JMETER_RESULTS $JUNIT_RESULTS
+        workingDirectory: ./terraform
+        displayName: "RESULTS: Convert JMeter Results to JUnit Format"
+
+  - ${{ if eq(parameters.generateJunit, true) }}:
+      - task: PublishTestResults@2
+        inputs:
+          testResultsFormat: "JUnit"
+          testResultsFiles: "$(JMETER_DIRECTORY_OUTPUT)/output.xml"
+        displayName: "RESULTS: Publish Load Testing Results"
+
+  - publish: $(JMETER_DIRECTORY_OUTPUT)/jtl
+    artifact: JMeterResults
+    condition: succeededOrFailed()
+    displayName: "Publish : Results Load Test Artifacts"
+
+  - publish: $(JMETER_DIRECTORY_OUTPUT)/log
+    artifact: JMeterLog
+    condition: succeededOrFailed()
+    displayName: "Publish : Logs Load Test Artifacts"
+
+  - publish: $(JMETER_DIRECTORY_OUTPUT)/dashboard/dashboard
+    artifact: JMeterDashboard
+    condition: succeededOrFailed()
+    displayName: "Publish : Dashboard Load Test Artifacts"
+
+  - publish: $(JMETER_DIRECTORY_OUTPUT)/csv
+    artifact: JMeterCSVsplit
+    condition: succeededOrFailed()
+    displayName: "Publish: CSV Split Load Test Artifacts"
+
+  - ${{ if eq(parameters.generateJunit, true) }}:
+      - publish: $(JMETER_DIRECTORY_OUTPUT)/output.xml
+        artifact: JMeterJunitReport
+        condition: succeededOrFailed()
+        displayName: "Publish: Junit Load Test Artifacts"
+
+  - script: |
+      terraform refresh -target azurerm_container_group.jmeter_controller -input=false -lock=false
+      terraform destroy -target azurerm_container_group.jmeter_controller -auto-approve -input=false -lock=false
+    condition: always()
+    workingDirectory: ./terraform
+    displayName: "TEARDOWN: Destroy jmeter_controller"
+
+  - script: |
+      terraform refresh -target azurerm_container_group.jmeter_workers  -input=false -lock=false
+      terraform destroy -target azurerm_container_group.jmeter_workers -auto-approve -input=false -lock=false
+    condition: always()
+    workingDirectory: ./terraform
+    displayName: "TEARDOWN: Destroy jmeter_workers"
+
+  - script: |
+      terraform refresh -input=false -lock=false
+      terraform destroy -auto-approve -input=false -lock=false
+    condition: always()
+    workingDirectory: ./terraform
+    displayName: "TEARDOWN: Run Terraform Destroy"
