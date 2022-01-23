@@ -7,6 +7,23 @@ parameters:
       - sample.jmx
       - sample.report-blazemeter.jmx
       - base.jmx
+  - name: target_url
+    displayName: Target URL
+    type: string
+    default: azure.microsoft.com
+    values:
+      - azure.microsoft.com
+
+  - name: virtual_users
+    displayName: Virtual user global count
+    type: number
+    default: 10
+    values:
+      - 10
+      - 20
+      - 30
+      - 40
+      
   - name: workers_count
     displayName: WORKER COUNT
     type: number
@@ -19,7 +36,7 @@ parameters:
   - name: timeout
     displayName: Timeout
     type: number
-    default: 1800
+    default: 3600
     values:
       - 1800
       - 3600
@@ -31,7 +48,7 @@ parameters:
   - name: generateJunit
     displayName: Generate Junit Results
     type: boolean
-    default: false
+    default: true
 
 trigger: none
 
@@ -56,6 +73,9 @@ variables:
     value: true
   - name: TF_VAR_JMETER_PIPELINE_CLI_ARGUMENTS
     value: " -Jblazemeter.upload.token=$(BLAZEMETER_UPLOAD_TOKEN) "
+  - name: TF_VAR_JMETER_PIPELINE_CLI_ARGUMENTS
+    value: "  -Jglobal.execution.users=${{ parameters.virtual_users }} -Jserver.url=${{ parameters.target_url }} "
+
 
 steps:
   - task: AzureCLI@2
