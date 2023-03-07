@@ -1,1 +1,1 @@
-FROM anasoid/jmeter:5.4-plugins
+FROM anasoid/jmeter:5.5
